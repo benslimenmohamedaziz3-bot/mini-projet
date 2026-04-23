@@ -1,0 +1,80 @@
+<section id="article-assistant" class="assistant card">
+  <!-- Top section: title, AI status, and article source info -->
+  <div class="assistant-top">
+    <div>
+      <p class="assistant-label">Premium AI</p>
+      <h2>Simple chatbot for this article</h2>
+      <p class="assistant-status">{{ statusText }}</p>
+    </div>
+
+    <div class="article-info">
+      <strong>{{ article.sourceName }}</strong>
+      <span *ngIf="article.publishedAt">{{ article.publishedAt | date:'MMM d, y' }}</span>
+    </div>
+  </div>
+
+  <!-- Summary section shown while the article brief is loading -->
+  <div class="brief-box" *ngIf="loadingBrief">Loading article summary...</div>
+
+  <!-- Summary section shown after the backend returns the brief -->
+  <div class="brief-box" *ngIf="!loadingBrief && brief">
+    <p class="brief-title">Summary</p>
+    <p>{{ brief.summary }}</p>
+
+    <ul *ngIf="brief.keyPoints.length">
+      <li *ngFor="let point of brief.keyPoints">{{ point }}</li>
+    </ul>
+  </div>
+
+  <!-- Quick action buttons to send common prompts -->
+  <div class="quick-list">
+    <button
+      *ngFor="let prompt of quickPrompts"
+      type="button"
+      class="quick-btn"
+      [disabled]="loading"
+      (click)="send(prompt)"
+    >
+      {{ prompt }}
+    </button>
+  </div>
+
+  <!-- Conversation area -->
+  <div class="chat-box">
+    <div class="empty" *ngIf="messages.length === 0">Ask a question about this article.</div>
+
+    <!-- Existing user + assistant messages -->
+    <div *ngFor="let message of messages" class="message" [class.user]="message.role === 'user'">
+      <div class="bubble">
+        <strong>{{ message.role === 'user' ? 'You' : 'AI' }}</strong>
+        <p>{{ message.content }}</p>
+        <small *ngIf="message.limitations?.length">{{ message.limitations?.[0] }}</small>
+      </div>
+    </div>
+
+    <!-- Temporary loading message while waiting for the backend -->
+    <div *ngIf="loading" class="message">
+      <div class="bubble">
+        <strong>AI</strong>
+        <p>Thinking...</p>
+      </div>
+    </div>
+  </div>
+
+  <p *ngIf="error" class="error-text">{{ error }}</p>
+
+  <!-- Message composer -->
+  <form class="chat-form" (ngSubmit)="send()">
+    <textarea
+      name="assistantPrompt"
+      [(ngModel)]="draft"
+      rows="3"
+      placeholder="Ask something about this article..."
+      [disabled]="loading"
+    ></textarea>
+
+    <button type="submit" [disabled]="loading || !draft.trim()">
+      {{ loading ? 'Sending...' : 'Send' }}
+    </button>
+  </form>
+</section>

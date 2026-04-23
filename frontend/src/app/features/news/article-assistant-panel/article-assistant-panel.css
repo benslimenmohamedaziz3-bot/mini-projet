@@ -1,0 +1,181 @@
+/* Main card container */
+.assistant {
+  display: grid;
+  gap: 1rem;
+  padding: 1.5rem;
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.08);
+}
+
+/* Header area with chatbot title and article source info */
+.assistant-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.assistant-label,
+.brief-title,
+.assistant-status,
+.article-info,
+.error-text,
+small {
+  margin: 0;
+}
+
+.assistant-label,
+.brief-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #b45309;
+}
+
+.assistant h2 {
+  margin: 0.35rem 0;
+  font-size: 1.7rem;
+}
+
+.assistant-status,
+.article-info,
+.brief-box,
+.bubble p,
+.empty,
+.error-text {
+  color: #475569;
+}
+
+.article-info {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 180px;
+}
+
+.brief-box,
+.chat-box,
+textarea {
+  border: 1px solid #e2e8f0;
+  border-radius: 18px;
+  background: #f8fafc;
+}
+
+.brief-box {
+  padding: 1rem;
+}
+
+.brief-box ul {
+  margin: 0.75rem 0 0;
+  padding-left: 1.1rem;
+}
+
+/* Quick prompt buttons */
+.quick-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.quick-btn,
+.chat-form button {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.7rem 1rem;
+  font-weight: 600;
+}
+
+.quick-btn {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+/* Scrollable conversation area */
+.chat-box {
+  display: grid;
+  gap: 0.75rem;
+  max-height: 420px;
+  overflow: auto;
+  padding: 1rem;
+}
+
+.message {
+  display: flex;
+}
+
+.message.user {
+  justify-content: flex-end;
+}
+
+/* Chat bubble styles for user and assistant messages */
+.bubble {
+  max-width: 80%;
+  padding: 0.9rem 1rem;
+  border-radius: 18px;
+  background: #ffffff;
+}
+
+.message.user .bubble {
+  background: #0f172a;
+}
+
+.message.user .bubble,
+.message.user .bubble p,
+.message.user .bubble small {
+  color: #fff;
+}
+
+.bubble p {
+  margin: 0.35rem 0 0;
+  white-space: pre-wrap;
+}
+
+small {
+  display: block;
+  margin-top: 0.5rem;
+}
+
+.empty {
+  text-align: center;
+  padding: 1rem 0;
+}
+
+.error-text {
+  color: #b91c1c;
+}
+
+/* Input area at the bottom of the chatbot */
+.chat-form {
+  display: grid;
+  gap: 0.75rem;
+}
+
+textarea {
+  width: 100%;
+  padding: 0.9rem 1rem;
+  resize: vertical;
+}
+
+.chat-form button {
+  justify-self: end;
+  min-width: 120px;
+  background: #0f172a;
+  color: #fff;
+}
+
+/* Small mobile adjustments */
+@media (max-width: 768px) {
+  .assistant {
+    padding: 1rem;
+  }
+
+  .bubble {
+    max-width: 100%;
+  }
+
+  .chat-form button {
+    width: 100%;
+    justify-self: stretch;
+  }
+}

@@ -11,7 +11,7 @@ class User(Base):
     full_name = Column(String(100), nullable=False)
     email = Column(String(100), unique=True, index=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
-    profile_photo = Column(LONGTEXT, nullable=True)
+    profile_photo = Column(Text().with_variant(LONGTEXT(), "mysql"), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     favorites = relationship("Favorite", back_populates="user", cascade="all, delete-orphan")

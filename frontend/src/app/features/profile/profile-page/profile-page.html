@@ -1,0 +1,298 @@
+<app-header></app-header>
+
+<main class="profile-page">
+  <section class="profile-hero card">
+    <div class="hero-copy">
+      <span class="eyebrow">{{ isPremiumUser ? 'Premium member space' : 'Account workspace' }}</span>
+      <h1>Manage your profile with confidence.</h1>
+      <p>
+        Update your personal information, secure your account, and keep your saved reading list
+        close at hand in one polished workspace. Upgrade to Premium whenever you want chatbot access.
+      </p>
+
+      <div class="hero-tags">
+        <span>Authenticated access</span>
+        <span>Live field validation</span>
+        <span>Secure update flow</span>
+        <span>{{ isPremiumUser ? 'Chatbot unlocked' : 'Premium available' }}</span>
+      </div>
+    </div>
+
+    <div class="hero-profile-card">
+      <div class="hero-avatar">
+        <img
+          *ngIf="profilePhotoPreview; else profileInitials"
+          [src]="profilePhotoPreview"
+          [alt]="(currentUser?.full_name || 'NewsHub member') + ' profile photo'"
+          class="hero-avatar-image"
+        />
+        <ng-template #profileInitials>{{ initials }}</ng-template>
+      </div>
+      <div class="hero-profile-meta">
+        <p class="hero-name">{{ currentUser?.full_name || 'NewsHub member' }}</p>
+        <p class="hero-email">{{ currentUser?.email || 'Signed in user' }}</p>
+      </div>
+
+      <div class="hero-stats">
+        <article>
+          <strong>{{ profileCompletion }}%</strong>
+          <span>Profile completion</span>
+        </article>
+        <article>
+          <strong>{{ savedArticlesCount }}</strong>
+          <span>Saved articles</span>
+        </article>
+        <article>
+          <strong>{{ isPremiumUser ? 'Premium' : 'Standard' }}</strong>
+          <span>{{ isPremiumUser ? (premiumPlanLabel + ' plan') : 'Membership tier' }}</span>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="profile-layout">
+    <article class="editor-panel card">
+      <div class="section-heading">
+        <div>
+          <span class="section-kicker">Use case alignment</span>
+          <h2>Profile information</h2>
+          <p>The profile details and the profile photo now save independently so each action can work on its own.</p>
+        </div>
+        <span class="status-pill" [class.loading]="isLoadingProfile || isSavingDetails || isSavingPhoto">
+          {{ profileStatusLabel }}
+        </span>
+      </div>
+
+      <div *ngIf="loadError" class="feedback-banner warning">
+        {{ loadError }}
+      </div>
+
+      <div *ngIf="detailsSuccessMessage" class="feedback-banner success">
+        {{ detailsSuccessMessage }}
+      </div>
+
+      <div *ngIf="detailsError" class="feedback-banner error">
+        {{ detailsError }}
+      </div>
+
+      <section class="photo-picker-card">
+        <div class="photo-picker-copy">
+          <h3>Profile photo</h3>
+          <p>Choose a photo, save it separately, or remove the current one without touching the rest of the form.</p>
+        </div>
+
+        <div *ngIf="photoActionSuccessMessage" class="feedback-banner success">
+          {{ photoActionSuccessMessage }}
+        </div>
+
+        <div *ngIf="photoActionError" class="feedback-banner error">
+          {{ photoActionError }}
+        </div>
+
+        <div class="photo-picker-panel">
+          <div class="photo-preview">
+            <img
+              *ngIf="profilePhotoPreview; else pickerInitials"
+              [src]="profilePhotoPreview"
+              [alt]="(currentUser?.full_name || 'NewsHub member') + ' profile photo preview'"
+              class="photo-preview-image"
+            />
+            <ng-template #pickerInitials>{{ initials }}</ng-template>
+          </div>
+
+          <div class="photo-picker-actions">
+            <input
+              id="profile-photo-input"
+              type="file"
+              accept="image/*"
+              class="photo-input"
+              (change)="onProfilePhotoSelected($event)"
+            />
+            <label class="secondary-action photo-upload-btn" for="profile-photo-input">
+              Choose photo
+            </label>
+            <button
+              *ngIf="canSavePhoto"
+              class="primary-action"
+              type="button"
+              (click)="saveProfilePhoto()"
+              [disabled]="isPhotoBusy"
+            >
+              {{ isSavingPhoto ? 'Saving photo...' : 'Update photo' }}
+            </button>
+            <button
+              *ngIf="hasPendingPhotoSelection"
+              class="secondary-action"
+              type="button"
+              (click)="cancelPhotoSelection()"
+              [disabled]="isPhotoBusy"
+            >
+              Cancel
+            </button>
+            <button
+              *ngIf="canRemovePhoto"
+              class="secondary-action"
+              type="button"
+              (click)="removeProfilePhoto()"
+              [disabled]="isPhotoBusy"
+            >
+              {{ isSavingPhoto ? 'Removing photo...' : 'Remove photo' }}
+            </button>
+          </div>
+        </div>
+
+        <small *ngIf="photoError" class="photo-error">{{ photoError }}</small>
+      </section>
+
+      <form class="profile-form" [formGroup]="profileForm" (ngSubmit)="saveProfile()">
+
+        <div class="form-grid">
+          <label class="field">
+            <span>First name</span>
+            <input type="text" formControlName="firstName" placeholder="Enter your first name" />
+            <small *ngIf="firstNameControl.touched && firstNameControl.hasError('required')">
+              First name is required.
+            </small>
+            <small *ngIf="firstNameControl.touched && firstNameControl.hasError('minlength')">
+              First name must contain at least 2 characters.
+            </small>
+          </label>
+
+          <label class="field">
+            <span>Last name</span>
+            <input type="text" formControlName="lastName" placeholder="Enter your last name" />
+            <small *ngIf="lastNameControl.touched && lastNameControl.hasError('required')">
+              Last name is required.
+            </small>
+            <small *ngIf="lastNameControl.touched && lastNameControl.hasError('minlength')">
+              Last name must contain at least 2 characters.
+            </small>
+          </label>
+
+          <label class="field field-full">
+            <span>Email address</span>
+            <input type="email" formControlName="email" placeholder="name@example.com" />
+            <small *ngIf="emailControl.touched && emailControl.hasError('required')">
+              Email is required.
+            </small>
+            <small *ngIf="emailControl.touched && emailControl.hasError('email')">
+              Please enter a valid email address.
+            </small>
+          </label>
+        </div>
+
+        <section class="security-card">
+          <div class="security-copy">
+            <h3>Account security</h3>
+            <p>
+              Password change is optional. If you enter a new password, the current password becomes
+              mandatory to protect the account.
+            </p>
+          </div>
+
+          <div class="form-grid security-grid">
+            <label class="field">
+              <span>Current password</span>
+              <input
+                type="password"
+                formControlName="currentPassword"
+                placeholder="Required to confirm a password change"
+              />
+              <small *ngIf="profileForm.touched && profileForm.hasError('currentPasswordRequired')">
+                Current password is required to change your password.
+              </small>
+            </label>
+
+            <label class="field">
+              <span>New password</span>
+              <input type="password" formControlName="newPassword" placeholder="At least 8 characters" />
+              <small *ngIf="newPasswordControl.touched && newPasswordControl.hasError('minlength')">
+                New password must contain at least 8 characters.
+              </small>
+              <small *ngIf="profileForm.touched && profileForm.hasError('newPasswordRequired')">
+                Enter a new password or clear the current password field.
+              </small>
+            </label>
+
+            <label class="field">
+              <span>Confirm password</span>
+              <input type="password" formControlName="confirmPassword" placeholder="Repeat the new password" />
+              <small *ngIf="profileForm.touched && profileForm.hasError('passwordMismatch')">
+                Password confirmation does not match the new password.
+              </small>
+            </label>
+          </div>
+        </section>
+
+        <div class="form-actions">
+          <button class="secondary-action" type="button" (click)="resetForm()" [disabled]="isProfileFormBusy">
+            Reset
+          </button>
+          <button class="primary-action" type="submit" [disabled]="isProfileFormBusy">
+            {{ isSavingDetails ? 'Saving details...' : 'Save details' }}
+          </button>
+        </div>
+      </form>
+    </article>
+
+    <aside class="profile-side-column">
+      <article class="side-card card">
+        <span class="section-kicker">Membership</span>
+        <h3>{{ isPremiumUser ? 'Premium is active' : 'Unlock Premium access' }}</h3>
+        <p *ngIf="isPremiumUser">
+          Your account can use the NewsHub chatbot on article pages. Membership details are stored
+          in local simulation mode for this project.
+        </p>
+        <p *ngIf="!isPremiumUser">
+          Upgrade with a small simulated checkout to reserve the article assistant for Premium
+          readers only.
+        </p>
+        <a class="membership-link" routerLink="/premium" [queryParams]="{ returnUrl: '/profile' }">
+          {{ isPremiumUser ? 'View Premium status' : 'Simulate Premium upgrade' }}
+        </a>
+      </article>
+
+      <article class="side-card card">
+        <span class="section-kicker">Exception handling</span>
+        <h3>Safe feedback for invalid input</h3>
+        <p>
+          Duplicate emails, weak passwords, invalid fields, or an incorrect current password are
+          surfaced in a clear error banner.
+        </p>
+      </article>
+    </aside>
+  </section>
+
+  <section class="favorites-section">
+    <div class="favorites-heading">
+      <div>
+        <span class="section-kicker">Reading collection</span>
+        <h2>Saved articles</h2>
+      </div>
+      <p>{{ savedArticlesCount }} article{{ savedArticlesCount > 1 ? 's' : '' }} saved</p>
+    </div>
+
+    <div *ngIf="isLoadingFavorites" class="state-card card">
+      <div class="spinner"></div>
+      <h3>Loading your reading list</h3>
+      <p>We are retrieving the articles you previously saved.</p>
+    </div>
+
+    <div *ngIf="!isLoadingFavorites && savedArticles.length === 0" class="state-card card">
+      <div class="empty-icon">*</div>
+      <h3>No saved articles yet</h3>
+      <p>Bookmark articles from the feed and they will appear here for quick access.</p>
+    </div>
+
+    <div class="articles-grid" *ngIf="!isLoadingFavorites && savedArticles.length > 0">
+      <app-news-card
+        *ngFor="let article of savedArticles; trackBy: trackByArticle"
+        [article]="article"
+        class="article-card-wrapper"
+      >
+      </app-news-card>
+    </div>
+  </section>
+</main>
+
+<app-footer></app-footer>

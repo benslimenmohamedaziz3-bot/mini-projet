@@ -1,0 +1,100 @@
+<header class="site-header">
+  <div class="container header-inner">
+    <a class="brand" routerLink="/">
+      <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none"
+        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path
+          d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2" />
+        <path d="M18 14h-8" />
+        <path d="M15 18h-5" />
+        <path d="M10 6h8v4h-8V6Z" />
+      </svg>
+      <span class="brand-text">NewsHub</span>
+    </a>
+
+    <nav class="header-actions">
+      <button
+        class="theme-btn"
+        type="button"
+        (click)="toggleTheme()"
+        [attr.aria-label]="isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'"
+        [attr.aria-pressed]="isDarkMode"
+      >
+        {{ isDarkMode ? 'Light' : 'Dark' }}
+      </button>
+
+      <ng-container *ngIf="!currentUser">
+        <a class="premium-link" routerLink="/premium">Premium</a>
+        <a class="login-link" routerLink="/login">Login</a>
+        <a class="signup-btn" routerLink="/register">Register</a>
+      </ng-container>
+
+      <ng-container *ngIf="currentUser">
+        <a
+          *ngIf="!isPremiumUser"
+          class="upgrade-btn"
+          routerLink="/premium"
+          [queryParams]="{ returnUrl: '/profile' }"
+        >
+          Go Premium
+        </a>
+
+        <div class="profile-box-container">
+          <button class="profile-box" (click)="toggleProfileDropdown()">
+            <div class="profile-avatar">
+              <img
+                *ngIf="currentUser.profile_photo; else initialsAvatar"
+                [src]="currentUser.profile_photo"
+                [alt]="currentUser.full_name + ' profile photo'"
+                class="profile-avatar-image"
+              />
+              <ng-template #initialsAvatar>{{ initials }}</ng-template>
+            </div>
+            <span class="profile-name">{{ currentUser.full_name }}</span>
+            <span *ngIf="isPremiumUser" class="profile-badge">Premium</span>
+            <span class="dropdown-arrow">v</span>
+          </button>
+
+          <div class="profile-dropdown" *ngIf="showProfileDropdown">
+            <div class="dropdown-header">
+              <p class="user-full-name">{{ currentUser.full_name }}</p>
+              <p class="user-email">{{ currentUser.email }}</p>
+              <span class="membership-chip" [class.active]="isPremiumUser">
+                {{ isPremiumUser ? 'Premium member' : 'Standard member' }}
+              </span>
+            </div>
+            <hr class="dropdown-divider" />
+            <a class="dropdown-item" routerLink="/profile" (click)="closeDropdown()">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="item-icon">
+                <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+              </svg>
+              My Profile
+            </a>
+            <a
+              class="dropdown-item"
+              routerLink="/premium"
+              [queryParams]="{ returnUrl: '/profile' }"
+              (click)="closeDropdown()"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="item-icon">
+                <path d="m12 3 2.45 4.96 5.47.8-3.96 3.86.94 5.45L12 15.5 7.1 18.07l.94-5.45-3.96-3.86 5.47-.8L12 3z"></path>
+              </svg>
+              {{ isPremiumUser ? 'Premium Status' : 'Upgrade to Premium' }}
+            </a>
+            <button class="dropdown-item logout-btn" (click)="logout()">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="item-icon">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                <polyline points="16 17 21 12 16 7"></polyline>
+                <line x1="21" y1="12" x2="9" y2="12"></line>
+              </svg>
+              Logout
+            </button>
+          </div>
+        </div>
+      </ng-container>
+    </nav>
+  </div>
+</header>

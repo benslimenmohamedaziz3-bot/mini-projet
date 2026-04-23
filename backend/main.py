@@ -5,6 +5,8 @@ import time
 from datetime import datetime
 import json
 import os
+import re
+import secrets
 from typing import Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -13,18 +15,35 @@ from urllib.request import urlopen
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy import func
 
 import models, schemas, crud, database
-from chatbot.service import NewsAssistantService
 from security import hash_password, verify_password, create_access_token, verify_token
+# The chatbot logic itself lives in one small file now.
+# main.py only exposes the HTTP routes and forwards the request.
+from simple_chatbot import (
+    OLLAMA_URL,
+    ask_chatbot as ask_simple_chatbot,
+    get_article_brief as get_simple_article_brief,
+    get_chatbot_status as get_simple_chatbot_status,
+)
 
 app = FastAPI()
-assistant_service = NewsAssistantService()
 NEWSDATA_API_URL = "https://newsdata.io/api/1/news"
 NEWSDATA_API_KEY = os.getenv("NEWSDATA_API_KEY", "pub_e79060a6b07f48949fbc203737376524")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+
+
+def get_model_fields_set(model) -> set[str]:
+    # Compatibility helper for both Pydantic v1 and v2.
+    # We use it when we need to know which fields were explicitly sent by the frontend.
+    fields = getattr(model, "model_fields_set", None)
+    if fields is not None:
+        return set(fields)
+    legacy_fields = getattr(model, "__fields_set__", None)
+    if legacy_fields is not None:
+        return set(legacy_fields)
+    return set()
 
 
 def serialize_user(user: models.User):
@@ -44,6 +63,50 @@ def create_user_access_token(user: models.User) -> str:
     return create_access_token(data={"sub": user.email, "user_id": user.id})
 
 
+def derive_display_name_from_email(email: str) -> str:
+    local_part = email.split("@", 1)[0].strip()
+    cleaned = re.sub(r"[^a-zA-Z0-9]+", " ", local_part).strip()
+    if not cleaned:
+        return "NewsHub User"
+
+    return " ".join(part.capitalize() for part in cleaned.split())
+
+
+def find_or_create_user_from_token(
+    db: Session,
+    user_id: Optional[int],
+    email: Optional[str],
+) -> Optional[models.User]:
+    user: Optional[models.User] = None
+
+    if user_id is not None:
+        user = db.query(models.User).filter(models.User.id == user_id).first()
+
+    if user is None and email:
+        normalized_email = email.lower()
+        user = db.query(models.User).filter(func.lower(models.User.email) == normalized_email).first()
+
+        if user is None:
+            bootstrap_user = models.User(
+                full_name=derive_display_name_from_email(normalized_email),
+                email=normalized_email,
+                password_hash=hash_password(secrets.token_urlsafe(24)),
+            )
+            if user_id is not None:
+                bootstrap_user.id = user_id
+
+            db.add(bootstrap_user)
+            try:
+                db.commit()
+                db.refresh(bootstrap_user)
+                user = bootstrap_user
+            except IntegrityError:
+                db.rollback()
+                user = db.query(models.User).filter(func.lower(models.User.email) == normalized_email).first()
+
+    return user
+
+
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(database.get_db),
@@ -58,15 +121,9 @@ async def get_current_user(
     if payload is None:
         raise credentials_exception
 
-    user: Optional[models.User] = None
     user_id = payload.get("user_id")
     email = payload.get("sub")
-
-    if user_id is not None:
-        user = db.query(models.User).filter(models.User.id == user_id).first()
-
-    if user is None and email:
-        user = db.query(models.User).filter(func.lower(models.User.email) == email.lower()).first()
+    user = find_or_create_user_from_token(db, user_id, email)
 
     if user is None:
         raise credentials_exception
@@ -96,6 +153,30 @@ def normalize_profile_photo(profile_photo: Optional[str]) -> Optional[str]:
     return normalized
 
 
+def get_managed_user(
+    user_id: int,
+    current_user: models.User,
+    db: Session,
+) -> models.User:
+    ensure_matching_user(user_id, current_user)
+
+    user = db.query(models.User).filter(models.User.id == current_user.id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return user
+
+
+def build_profile_update_response(user: models.User) -> dict:
+    access_token = create_user_access_token(user)
+    return {
+        "message": "Profile updated successfully",
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": serialize_user(user),
+    }
+
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     start_time = time.time()
@@ -108,7 +189,7 @@ async def log_requests(request: Request, call_next):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], # Temporarily allow ALL for debugging
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -255,16 +336,12 @@ def get_user_profile(user_id: int, current_user: models.User = Depends(get_curre
 @app.put("/users/{user_id}/profile")
 def update_user_profile(
     user_id: int,
-    data: schemas.ProfileUpdateData,
+    data: schemas.ProfileDetailsUpdateData,
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(get_current_user),
 ):
     try:
-        ensure_matching_user(user_id, current_user)
-
-        user = db.query(models.User).filter(models.User.id == current_user.id).first()
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
+        user = get_managed_user(user_id, current_user, db)
 
         normalized_name = data.full_name.strip()
         normalized_email = data.email.strip().lower()
@@ -294,19 +371,53 @@ def update_user_profile(
 
         user.full_name = normalized_name
         user.email = normalized_email
-        if "profile_photo" in data.model_fields_set:
-            user.profile_photo = normalize_profile_photo(data.profile_photo)
 
         db.commit()
         db.refresh(user)
-        access_token = create_user_access_token(user)
+        return build_profile_update_response(user)
+    except HTTPException as he:
+        db.rollback()
+        raise he
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
-        return {
-            "message": "Profile updated successfully",
-            "access_token": access_token,
-            "token_type": "bearer",
-            "user": serialize_user(user),
-        }
+
+@app.put("/users/{user_id}/profile/photo")
+def update_user_profile_photo(
+    user_id: int,
+    data: schemas.ProfilePhotoUpdateData,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    try:
+        user = get_managed_user(user_id, current_user, db)
+        user.profile_photo = normalize_profile_photo(data.profile_photo)
+
+        db.commit()
+        db.refresh(user)
+        return build_profile_update_response(user)
+    except HTTPException as he:
+        db.rollback()
+        raise he
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/users/{user_id}/profile/photo")
+def delete_user_profile_photo(
+    user_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    try:
+        user = get_managed_user(user_id, current_user, db)
+        user.profile_photo = None
+
+        db.commit()
+        db.refresh(user)
+        return build_profile_update_response(user)
     except HTTPException as he:
         db.rollback()
         raise he
@@ -323,15 +434,21 @@ def save_favorite(
     try:
         ensure_matching_user(payload.user_id, current_user)
         news_id = crud.upsert_news_record(db, payload.article)
-        
-        stmt = mysql_insert(models.Favorite).values(
-            user_id=current_user.id,
-            news_id=news_id
-        )
-        stmt = stmt.on_duplicate_key_update(
-            saved_at=func.current_timestamp()
-        )
-        db.execute(stmt)
+
+        favorite = db.query(models.Favorite).filter(
+            models.Favorite.user_id == current_user.id,
+            models.Favorite.news_id == news_id,
+        ).first()
+
+        if favorite is None:
+            favorite = models.Favorite(
+                user_id=current_user.id,
+                news_id=news_id,
+            )
+            db.add(favorite)
+        else:
+            favorite.saved_at = datetime.utcnow()
+
         db.commit()
         return {"message": "Article saved", "news_id": news_id}
     except HTTPException as he:
@@ -488,32 +605,36 @@ def get_comments(article_url: str, db: Session = Depends(database.get_db)):
 @app.post("/chatbot/article-brief")
 def get_article_brief(
     payload: schemas.ArticleBriefRequest,
-    current_user: models.User = Depends(get_current_user),
 ):
+    # Frontend calls this to display the small article summary above the chat.
     try:
-        return assistant_service.get_article_brief(payload.article.model_dump())
+        return get_simple_article_brief(payload.article)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chatbot brief error: {e}")
 
 
 @app.get("/chatbot/status")
 def get_chatbot_status():
+    # Frontend calls this to know whether Ollama + qwen3:14b are ready.
     try:
-        return assistant_service.get_runtime_status()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Chatbot status error: {e}")
+        return get_simple_chatbot_status()
+    except Exception:
+        raise HTTPException(status_code=500, detail="Chatbot status error.")
 
 
 @app.post("/chatbot/ask")
 def ask_chatbot(
     payload: schemas.AskChatbotRequest,
-    current_user: models.User = Depends(get_current_user),
 ):
+    # Main chat endpoint:
+    # receive article + message + small chat history,
+    # then forward everything to the simple chatbot helper.
     try:
-        return assistant_service.ask(
-            article_payload=payload.article.model_dump(),
-            message=payload.message,
-            history_payload=[turn.model_dump() for turn in payload.history],
-        )
+        return ask_simple_chatbot(payload.article, payload.message, payload.history)
+    except HTTPError as e:
+        detail = e.read().decode("utf-8", errors="ignore")
+        raise HTTPException(status_code=500, detail=detail or "Ollama returned an error.")
+    except URLError:
+        raise HTTPException(status_code=503, detail=f"Ollama is not running on {OLLAMA_URL}.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chatbot response error: {e}")

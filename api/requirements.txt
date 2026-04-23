@@ -1,8 +1,0 @@
-fastapi
-uvicorn
-mysql-connector-python
-python-multipart
-bcrypt
-sqlalchemy
-pymysql
-beautifulsoup4

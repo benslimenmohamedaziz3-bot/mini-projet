@@ -13,12 +13,15 @@ class LoginData(BaseModel):
     password: str
 
 
-class ProfileUpdateData(BaseModel):
+class ProfileDetailsUpdateData(BaseModel):
     full_name: str
     email: str
-    profile_photo: Optional[str] = None
     current_password: Optional[str] = None
     new_password: Optional[str] = None
+
+
+class ProfilePhotoUpdateData(BaseModel):
+    profile_photo: str
 
 class FavoriteArticleData(BaseModel):
     article_id: Optional[str] = None
@@ -48,16 +51,21 @@ class CommentRequest(BaseModel):
     comment_text: str
 
 
+# One previous chat message sent by the frontend.
+# `mode` tells us whether the message came from normal chat or article-grounded chat.
 class ChatTurnData(BaseModel):
     role: str
     content: str
     mode: Optional[str] = "general"
 
 
+# Request body for the small article summary endpoint.
 class ArticleBriefRequest(BaseModel):
     article: FavoriteArticleData
 
 
+# Request body for the main chatbot endpoint.
+# It includes the article, the current user message, and a short history.
 class AskChatbotRequest(BaseModel):
     article: FavoriteArticleData
     message: str

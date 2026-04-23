@@ -1,5 +1,4 @@
 from sqlalchemy.orm import Session
-from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy import func
 from datetime import datetime
 from typing import Optional
@@ -44,43 +43,34 @@ def upsert_news_record(db: Session, article: schemas.FavoriteArticleData) -> int
         raise ValueError("Article URL is required")
 
     source_name = (article.source_name or "Unknown source").strip() or "Unknown source"
-    
-    stmt_source = mysql_insert(models.Source).values(
-        source_name=source_name, 
-        source_url=article_url
-    )
-    stmt_source = stmt_source.on_duplicate_key_update(
-        source_url=stmt_source.inserted.source_url
-    )
-    db.execute(stmt_source)
-    source_id = db.query(models.Source).filter_by(source_name=source_name, source_url=article_url).first().id
+
+    source = db.query(models.Source).filter_by(source_name=source_name, source_url=article_url).first()
+    if source is None:
+        source = models.Source(
+            source_name=source_name,
+            source_url=article_url,
+        )
+        db.add(source)
+        db.flush()
 
     interest_id = get_or_create_interest_id(db, article.category)
     published_at = parse_publication_date(article.published_at)
     article_content = article.content or article.description
 
-    stmt_news = mysql_insert(models.News).values(
-        external_id=article.article_id,
-        title=article.title,
-        content=article_content,
-        image_url=article.image_url,
-        article_url=article_url,
-        published_at=published_at,
-        interest_id=interest_id,
-        source_id=source_id,
-        datatype=article.datatype,
-        country=article.country
-    )
-    stmt_news = stmt_news.on_duplicate_key_update(
-        external_id=stmt_news.inserted.external_id,
-        title=stmt_news.inserted.title,
-        content=stmt_news.inserted.content,
-        image_url=stmt_news.inserted.image_url,
-        published_at=stmt_news.inserted.published_at,
-        interest_id=stmt_news.inserted.interest_id,
-        source_id=stmt_news.inserted.source_id,
-        datatype=stmt_news.inserted.datatype,
-        country=stmt_news.inserted.country
-    )
-    db.execute(stmt_news)
-    return db.query(models.News).filter_by(article_url=article_url).first().id
+    news = db.query(models.News).filter_by(article_url=article_url).first()
+    if news is None:
+        news = models.News(article_url=article_url)
+        db.add(news)
+
+    news.external_id = article.article_id
+    news.title = article.title
+    news.content = article_content
+    news.image_url = article.image_url
+    news.published_at = published_at
+    news.interest_id = interest_id
+    news.source_id = source.id
+    news.datatype = article.datatype
+    news.country = article.country
+
+    db.flush()
+    return news.id
