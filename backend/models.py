@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Boolean, Column, Integer, String, Text, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -12,11 +12,17 @@ class User(Base):
     email = Column(String(100), unique=True, index=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
     profile_photo = Column(Text().with_variant(LONGTEXT(), "mysql"), nullable=True)
+    role = Column(String(20), nullable=False, default="user")
+    is_premium = Column(Boolean, nullable=False, default=False)
+    premium_plan = Column(String(20), nullable=True)
+    premium_since = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     favorites = relationship("Favorite", back_populates="user", cascade="all, delete-orphan")
     comments = relationship("Comment", back_populates="user", cascade="all, delete-orphan")
     interests = relationship("Interest", secondary="user_interests", back_populates="users")
+    live_events = relationship("LiveEvent", back_populates="editor")
+    live_messages = relationship("LiveMessage", back_populates="user", cascade="all, delete-orphan")
 
 class Interest(Base):
     __tablename__ = "interests"
@@ -85,3 +91,37 @@ class Comment(Base):
 
     user = relationship("User", back_populates="comments")
     news = relationship("News", back_populates="comments")
+
+
+class LiveEvent(Base):
+    __tablename__ = "live_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(200), nullable=False)
+    description = Column(Text, nullable=False)
+    category = Column(String(50), nullable=False)
+    cover_image = Column(String(500), nullable=True)
+    stream_url = Column(String(500), nullable=True)
+    status = Column(String(20), nullable=False, default="upcoming")
+    premium_only = Column(Boolean, nullable=False, default=True)
+    editor_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    started_at = Column(DateTime, nullable=True)
+    ended_at = Column(DateTime, nullable=True)
+
+    editor = relationship("User", back_populates="live_events")
+    messages = relationship("LiveMessage", back_populates="live_event", cascade="all, delete-orphan")
+
+
+class LiveMessage(Base):
+    __tablename__ = "live_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    live_event_id = Column(Integer, ForeignKey("live_events.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    message_type = Column(String(20), nullable=False)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+    live_event = relationship("LiveEvent", back_populates="messages")
+    user = relationship("User", back_populates="live_messages")

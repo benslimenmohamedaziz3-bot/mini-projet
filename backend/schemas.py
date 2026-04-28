@@ -77,6 +77,10 @@ class UserResponse(BaseModel):
     email: str
     profile_photo: Optional[str] = None
     interests: List[str] = []
+    role: str = "user"
+    is_premium: bool = False
+    premium_plan: Optional[str] = None
+    premium_since: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -97,3 +101,24 @@ class Token(BaseModel):
 class TokenData(BaseModel):
     user_id: Optional[int] = None
     email: Optional[str] = None
+
+
+class PremiumActivationRequest(BaseModel):
+    plan: str
+    cardholderName: str
+    cardNumber: str
+    expiry: str
+    cvc: str
+
+
+class CreateLiveEventRequest(BaseModel):
+    title: str
+    description: str
+    category: str
+    cover_image: Optional[str] = None
+    stream_url: Optional[str] = None
+    premium_only: bool = True
+
+
+class CreateLiveMessageRequest(BaseModel):
+    content: str

@@ -89,6 +89,18 @@ def ensure_schema_extensions():
     if "profile_photo" not in existing_columns:
         with engine.begin() as connection:
             connection.execute(text("ALTER TABLE users ADD COLUMN profile_photo LONGTEXT NULL"))
+    if "role" not in existing_columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(20) NOT NULL DEFAULT 'user'"))
+    if "is_premium" not in existing_columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE users ADD COLUMN is_premium BOOLEAN NOT NULL DEFAULT FALSE"))
+    if "premium_plan" not in existing_columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE users ADD COLUMN premium_plan VARCHAR(20) NULL"))
+    if "premium_since" not in existing_columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE users ADD COLUMN premium_since DATETIME NULL"))
 
     with SessionLocal() as session:
         if session.query(models.Interest).count() == 0:

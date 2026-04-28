@@ -1,4 +1,7 @@
-from fastapi import FastAPI, HTTPException, Request, Depends
+from collections import defaultdict
+from uuid import uuid4
+
+from fastapi import FastAPI, HTTPException, Request, Depends, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 import time
@@ -52,6 +55,10 @@ def serialize_user(user: models.User):
         "full_name": user.full_name,
         "email": user.email,
         "profile_photo": user.profile_photo,
+        "role": user.role or "user",
+        "is_premium": bool(user.is_premium),
+        "premium_plan": user.premium_plan,
+        "premium_since": user.premium_since.isoformat() if user.premium_since else None,
         "interests": [
             interest.name.lower()
             for interest in sorted(user.interests, key=lambda interest: interest.name.lower())
@@ -131,9 +138,45 @@ async def get_current_user(
     return user
 
 
+def get_current_user_from_token(token: str, db: Session) -> models.User:
+    payload = verify_token(token)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Could not validate credentials")
+
+    user_id = payload.get("user_id")
+    email = payload.get("sub")
+    user = find_or_create_user_from_token(db, user_id, email)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Could not validate credentials")
+
+    return user
+
+
 def ensure_matching_user(user_id: Optional[int], current_user: models.User) -> None:
     if user_id is not None and user_id != current_user.id:
         raise HTTPException(status_code=403, detail="You are not allowed to access this resource.")
+
+
+def ensure_editor(current_user: models.User) -> None:
+    if (current_user.role or "user") != "editor":
+        raise HTTPException(status_code=403, detail="Editor access is required for this action.")
+
+
+def ensure_live_room_editor(live_event: models.LiveEvent, current_user: models.User) -> None:
+    ensure_editor(current_user)
+    if live_event.editor_user_id and live_event.editor_user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="This live room belongs to another editor.")
+
+
+def can_access_live_event(live_event: models.LiveEvent, current_user: models.User) -> bool:
+    is_room_editor = live_event.editor_user_id == current_user.id and (current_user.role or "user") == "editor"
+    if is_room_editor:
+        return True
+
+    if live_event.premium_only:
+        return bool(current_user.is_premium)
+
+    return True
 
 
 def normalize_profile_photo(profile_photo: Optional[str]) -> Optional[str]:
@@ -177,6 +220,129 @@ def build_profile_update_response(user: models.User) -> dict:
     }
 
 
+def build_auth_response(user: models.User, message: str) -> dict:
+    return {
+        "message": message,
+        "access_token": create_user_access_token(user),
+        "token_type": "bearer",
+        "user": serialize_user(user),
+    }
+
+
+def serialize_live_message(message: models.LiveMessage) -> dict:
+    return {
+        "id": message.id,
+        "message_type": message.message_type,
+        "content": message.content,
+        "created_at": message.created_at.isoformat() if message.created_at else None,
+        "user_id": message.user_id,
+        "user_name": message.user.full_name if message.user else "NewsHub member",
+    }
+
+
+class LiveRoomManager:
+    def __init__(self) -> None:
+        self.connections: dict[int, dict[str, dict]] = defaultdict(dict)
+
+    async def connect(self, room_id: int, websocket: WebSocket, user: models.User) -> str:
+        client_id = str(uuid4())
+        self.connections[room_id][client_id] = {
+            "socket": websocket,
+            "user_id": user.id,
+            "role": user.role or "user",
+        }
+        return client_id
+
+    def disconnect(self, room_id: int, client_id: str) -> None:
+        room_connections = self.connections.get(room_id)
+        if room_connections is None:
+            return
+
+        room_connections.pop(client_id, None)
+        if not room_connections:
+            self.connections.pop(room_id, None)
+
+    def get_viewer_count(self, room_id: int) -> int:
+        return len(self.connections.get(room_id, {}))
+
+    async def broadcast(self, room_id: int, payload: dict, exclude_client_id: Optional[str] = None) -> None:
+        room_connections = self.connections.get(room_id, {})
+        disconnected_clients: list[str] = []
+
+        for client_id, connection in room_connections.items():
+            if exclude_client_id and client_id == exclude_client_id:
+                continue
+
+            try:
+                await connection["socket"].send_json(payload)
+            except Exception:
+                disconnected_clients.append(client_id)
+
+        for client_id in disconnected_clients:
+            self.disconnect(room_id, client_id)
+
+    async def send_to_client(self, room_id: int, client_id: str, payload: dict) -> None:
+        room_connections = self.connections.get(room_id, {})
+        target = room_connections.get(client_id)
+        if not target:
+            return
+
+        try:
+            await target["socket"].send_json(payload)
+        except Exception:
+            self.disconnect(room_id, client_id)
+
+    async def broadcast_viewer_count(self, room_id: int) -> None:
+        await self.broadcast(
+            room_id,
+            {
+                "type": "viewer_count",
+                "viewerCount": self.get_viewer_count(room_id),
+            },
+        )
+
+
+live_room_manager = LiveRoomManager()
+
+
+def serialize_live_event(event: models.LiveEvent, viewer_count: int = 0) -> dict:
+    return {
+        "id": event.id,
+        "title": event.title,
+        "description": event.description,
+        "category": event.category,
+        "cover_image": event.cover_image,
+        "stream_url": event.stream_url,
+        "status": event.status,
+        "premium_only": bool(event.premium_only),
+        "viewer_count": viewer_count,
+        "editor_user_id": event.editor_user_id,
+        "editor_name": event.editor.full_name if event.editor else None,
+        "created_at": event.created_at.isoformat() if event.created_at else None,
+        "started_at": event.started_at.isoformat() if event.started_at else None,
+        "ended_at": event.ended_at.isoformat() if event.ended_at else None,
+    }
+
+
+def serialize_live_event_detail(event: models.LiveEvent) -> dict:
+    updates = [
+        serialize_live_message(message)
+        for message in event.messages
+        if message.message_type == "update"
+    ]
+    chat_messages = [
+        serialize_live_message(message)
+        for message in event.messages
+        if message.message_type == "chat"
+    ]
+
+    return {
+        **serialize_live_event(event, viewer_count=live_room_manager.get_viewer_count(event.id)),
+        "updates": updates[-30:],
+        "chat_messages": chat_messages[-40:],
+    }
+
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     start_time = time.time()
@@ -210,6 +376,207 @@ def apply_runtime_schema_updates():
 @app.get("/users/me", response_model=schemas.UserResponse)
 def read_users_me(current_user: models.User = Depends(get_current_user)):
     return serialize_user(current_user)
+
+
+@app.post("/premium/activate")
+def activate_premium_membership(
+    payload: schemas.PremiumActivationRequest,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    try:
+        selected_plan = payload.plan.strip().lower()
+        if selected_plan not in {"monthly", "annual"}:
+            raise HTTPException(status_code=400, detail="Please choose a valid premium plan.")
+
+        current_user.is_premium = True
+        current_user.premium_plan = selected_plan
+        current_user.premium_since = current_user.premium_since or datetime.utcnow()
+
+        db.commit()
+        db.refresh(current_user)
+        return build_auth_response(
+            current_user,
+            "Premium access has been activated in simulation mode.",
+        )
+    except HTTPException as he:
+        db.rollback()
+        raise he
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Premium activation failed: {exc}")
+
+
+@app.get("/live-events")
+def list_live_events(db: Session = Depends(database.get_db)):
+    events = (
+        db.query(models.LiveEvent)
+        .order_by(
+            desc(models.LiveEvent.status == "live"),
+            desc(models.LiveEvent.created_at),
+        )
+        .all()
+    )
+
+    return [
+        serialize_live_event(event, viewer_count=live_room_manager.get_viewer_count(event.id))
+        for event in events
+    ]
+
+
+@app.get("/live-events/{event_id}")
+def get_live_event(event_id: int, db: Session = Depends(database.get_db)):
+    event = db.query(models.LiveEvent).filter(models.LiveEvent.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Live event not found.")
+
+    return serialize_live_event_detail(event)
+
+
+@app.post("/live-events")
+def create_live_event(
+    payload: schemas.CreateLiveEventRequest,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    try:
+        ensure_editor(current_user)
+
+        title = payload.title.strip()
+        description = payload.description.strip()
+        category = payload.category.strip().lower()
+
+        if not title:
+            raise HTTPException(status_code=400, detail="A live room title is required.")
+        if not description:
+            raise HTTPException(status_code=400, detail="A live room description is required.")
+        if not category:
+            raise HTTPException(status_code=400, detail="A category is required.")
+
+        live_event = models.LiveEvent(
+            title=title,
+            description=description,
+            category=category,
+            cover_image=payload.cover_image.strip() if payload.cover_image else None,
+            stream_url=payload.stream_url.strip() if payload.stream_url else None,
+            premium_only=payload.premium_only,
+            editor_user_id=current_user.id,
+            status="upcoming",
+        )
+
+        db.add(live_event)
+        db.commit()
+        db.refresh(live_event)
+        return serialize_live_event(live_event)
+    except HTTPException as he:
+        db.rollback()
+        raise he
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Live room creation failed: {exc}")
+
+
+@app.post("/live-events/{event_id}/start")
+async def start_live_event(
+    event_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    try:
+        event = db.query(models.LiveEvent).filter(models.LiveEvent.id == event_id).first()
+        if not event:
+            raise HTTPException(status_code=404, detail="Live event not found.")
+
+        ensure_live_room_editor(event, current_user)
+
+        event.status = "live"
+        event.started_at = datetime.utcnow()
+        event.ended_at = None
+
+        db.commit()
+        db.refresh(event)
+
+        await live_room_manager.broadcast(
+            event.id,
+            {
+                "type": "room_status",
+                "status": event.status,
+            },
+        )
+        return serialize_live_event(event, viewer_count=live_room_manager.get_viewer_count(event.id))
+    except HTTPException as he:
+        db.rollback()
+        raise he
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Unable to start the live room: {exc}")
+
+
+@app.post("/live-events/{event_id}/end")
+async def end_live_event(
+    event_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    try:
+        event = db.query(models.LiveEvent).filter(models.LiveEvent.id == event_id).first()
+        if not event:
+            raise HTTPException(status_code=404, detail="Live event not found.")
+
+        ensure_live_room_editor(event, current_user)
+
+        event.status = "ended"
+        event.ended_at = datetime.utcnow()
+
+        db.commit()
+        db.refresh(event)
+
+        await live_room_manager.broadcast(
+            event.id,
+            {
+                "type": "room_status",
+                "status": event.status,
+            },
+        )
+        await live_room_manager.broadcast(
+            event.id,
+            {
+                "type": "stream_ended",
+            },
+        )
+        return serialize_live_event(event, viewer_count=live_room_manager.get_viewer_count(event.id))
+    except HTTPException as he:
+        db.rollback()
+        raise he
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Unable to end the live room: {exc}")
+
+
+@app.delete("/live-events/{event_id}")
+def delete_live_event(
+    event_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    try:
+        event = db.query(models.LiveEvent).filter(models.LiveEvent.id == event_id).first()
+        if not event:
+            raise HTTPException(status_code=404, detail="Live event not found.")
+
+        ensure_live_room_editor(event, current_user)
+
+        db.delete(event)
+        db.commit()
+        live_room_manager.connections.pop(event_id, None)
+
+        return {"message": "Live room deleted successfully."}
+    except HTTPException as he:
+        db.rollback()
+        raise he
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Unable to delete the live room: {exc}")
 
 
 @app.get("/news-feed") # filtering parameters are passed through query string, e.g. /news-feed?category=technology&language=en
@@ -255,11 +622,18 @@ def complete_signup(data: schemas.SignupData, db: Session = Depends(database.get
 
         if len(data.interest_ids) > 3:
             raise HTTPException(status_code=400, detail="You can select up to 3 interests.")
-        
+
+        normalized_email = data.email.strip().lower()
+        existing_user = db.query(models.User).filter(
+            func.lower(models.User.email) == normalized_email
+        ).first()
+        if existing_user:
+            raise HTTPException(status_code=400, detail="This account already exists.")
+
         # 1. Insert User
         new_user = models.User(
-            full_name=data.full_name,
-            email=data.email,
+            full_name=data.full_name.strip(),
+            email=normalized_email,
             password_hash=hash_password(data.password)
         )
         db.add(new_user)
@@ -276,14 +650,9 @@ def complete_signup(data: schemas.SignupData, db: Session = Depends(database.get
 
         print("Signup transaction committed successfully.")
         db.refresh(new_user)
-        access_token = create_user_access_token(new_user)
-        return {
-            "message": "Signup complete",
-            "user_id": new_user.id,
-            "access_token": access_token,
-            "token_type": "bearer",
-            "user": serialize_user(new_user),
-        }
+        response = build_auth_response(new_user, "Signup complete")
+        response["user_id"] = new_user.id
+        return response
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=400, detail="This email is already registered.")
@@ -299,7 +668,8 @@ def complete_signup(data: schemas.SignupData, db: Session = Depends(database.get
 @app.get("/check-email/{email}")
 def check_email(email: str, db: Session = Depends(database.get_db)):
     try:
-        user = db.query(models.User).filter(models.User.email == email).first()
+        normalized_email = email.strip().lower()
+        user = db.query(models.User).filter(func.lower(models.User.email) == normalized_email).first()
         return {"exists": user is not None}
     except Exception as e:
         print(f"Error checking email: {e}")
@@ -313,13 +683,7 @@ def login(data: schemas.LoginData, db: Session = Depends(database.get_db)):
         if not user or not verify_password(data.password, user.password_hash):
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
-        access_token = create_user_access_token(user)
-        return {
-            "message": "Login successful", 
-            "access_token": access_token,
-            "token_type": "bearer",
-            "user": serialize_user(user),
-        }
+        return build_auth_response(user, "Login successful")
     except HTTPException as he:
         raise he
     except Exception as e:
@@ -600,6 +964,153 @@ def get_comments(article_url: str, db: Session = Depends(database.get_db)):
         ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database Error: {e}")
+
+
+@app.websocket("/ws/live-events/{event_id}")
+async def live_event_socket(
+    websocket: WebSocket,
+    event_id: int,
+    token: str = Query(default=""),
+):
+    db = database.SessionLocal()
+    client_id: Optional[str] = None
+    room_id = event_id
+
+    try:
+        if not token:
+            await websocket.close(code=4401)
+            return
+
+        current_user = get_current_user_from_token(token, db)
+        live_event = db.query(models.LiveEvent).filter(models.LiveEvent.id == event_id).first()
+
+        if not live_event:
+            await websocket.close(code=4404)
+            return
+
+        if not can_access_live_event(live_event, current_user):
+            await websocket.close(code=4403)
+            return
+
+        await websocket.accept()
+        client_id = await live_room_manager.connect(room_id, websocket, current_user)
+
+        await websocket.send_json(
+            {
+                "type": "socket_ready",
+                "clientId": client_id,
+                "viewerCount": live_room_manager.get_viewer_count(room_id),
+                "status": live_event.status,
+                "isEditor": live_event.editor_user_id == current_user.id and (current_user.role or "user") == "editor",
+            }
+        )
+        await live_room_manager.broadcast_viewer_count(room_id)
+
+        while True:
+            payload = await websocket.receive_json()
+            message_type = str(payload.get("type", "")).strip()
+
+            if message_type == "chat_message":
+                content = str(payload.get("content", "")).strip()
+                if not content:
+                    continue
+
+                live_message = models.LiveMessage(
+                    live_event_id=live_event.id,
+                    user_id=current_user.id,
+                    message_type="chat",
+                    content=content,
+                )
+                db.add(live_message)
+                db.commit()
+                db.refresh(live_message)
+                live_message.user = current_user
+
+                await live_room_manager.broadcast(
+                    room_id,
+                    {
+                        "type": "chat_message",
+                        "message": serialize_live_message(live_message),
+                    },
+                )
+                continue
+
+            if message_type == "live_update":
+                ensure_live_room_editor(live_event, current_user)
+                content = str(payload.get("content", "")).strip()
+                if not content:
+                    continue
+
+                live_message = models.LiveMessage(
+                    live_event_id=live_event.id,
+                    user_id=current_user.id,
+                    message_type="update",
+                    content=content,
+                )
+                db.add(live_message)
+                db.commit()
+                db.refresh(live_message)
+                live_message.user = current_user
+
+                await live_room_manager.broadcast(
+                    room_id,
+                    {
+                        "type": "live_update",
+                        "message": serialize_live_message(live_message),
+                    },
+                )
+                continue
+
+            if message_type == "broadcaster_ready":
+                ensure_live_room_editor(live_event, current_user)
+                await live_room_manager.broadcast(
+                    room_id,
+                    {
+                        "type": "broadcaster_ready",
+                        "senderClientId": client_id,
+                    },
+                    exclude_client_id=client_id,
+                )
+                continue
+
+            if message_type == "stream_ended":
+                ensure_live_room_editor(live_event, current_user)
+                await live_room_manager.broadcast(
+                    room_id,
+                    {
+                        "type": "stream_ended",
+                    },
+                )
+                continue
+
+            if message_type in {"viewer_joined", "offer", "answer", "ice_candidate"}:
+                outgoing_payload = {
+                    "type": message_type,
+                    "senderClientId": client_id,
+                }
+
+                if message_type in {"offer", "answer"}:
+                    outgoing_payload["sdp"] = payload.get("sdp")
+
+                if message_type == "ice_candidate":
+                    outgoing_payload["candidate"] = payload.get("candidate")
+
+                target_client_id = payload.get("targetClientId")
+                if target_client_id:
+                    await live_room_manager.send_to_client(room_id, str(target_client_id), outgoing_payload)
+                else:
+                    await live_room_manager.broadcast(
+                        room_id,
+                        outgoing_payload,
+                        exclude_client_id=client_id,
+                    )
+    except WebSocketDisconnect:
+        pass
+    finally:
+        if client_id is not None:
+            live_room_manager.disconnect(room_id, client_id)
+            await live_room_manager.broadcast_viewer_count(room_id)
+        db.close()
 
 
 @app.post("/chatbot/article-brief")
