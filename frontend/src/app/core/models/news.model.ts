@@ -35,10 +35,8 @@ export interface NewsArticle {
   url: string;
   category: Exclude<NewsCategory, 'all'>;
   sourceDomain?: string;
-  sourceId?: string;
   countries?: string[];
   dataType?: NewsDataType;
-  matchedCategories?: Exclude<NewsCategory, 'all'>[];
 }
 
 export type NewsStore = Record<Exclude<NewsCategory, 'all'>, NewsArticle[]>;

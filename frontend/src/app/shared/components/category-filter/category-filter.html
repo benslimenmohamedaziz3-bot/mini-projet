@@ -9,7 +9,7 @@
 
   <div class="chips">
     <button
-      *ngFor="let category of categories"
+      *ngFor="let category of categories; trackBy: trackByCategoryValue"
       type="button"
       class="chip"
       [class.active]="category.value === selectedCategory"
@@ -22,8 +22,8 @@
   <div class="extra-filters">
     <label class="filter-field">
       <span>Filter by Country</span>
-      <select [value]="filters.country" (change)="onCountryChange($event)">
-        <option *ngFor="let option of countryOptions" [value]="option.value">
+      <select [ngModel]="filters.country" (ngModelChange)="onCountryChange($event)">
+        <option *ngFor="let option of countryOptions; trackBy: trackByOptionValue" [ngValue]="option.value">
           {{ option.label }}
         </option>
       </select>
@@ -31,8 +31,8 @@
 
     <label class="filter-field">
       <span>Filter by Source</span>
-      <select [value]="filters.source" (change)="onSourceChange($event)">
-        <option *ngFor="let option of sourceOptions" [value]="option.value">
+      <select [ngModel]="filters.source" (ngModelChange)="onSourceChange($event)">
+        <option *ngFor="let option of sourceOptions; trackBy: trackByOptionValue" [ngValue]="option.value">
           {{ option.label }}
         </option>
       </select>
@@ -40,13 +40,13 @@
 
     <label class="filter-field">
       <span>Filter by Date</span>
-      <input type="date" [value]="filters.date" (change)="onDateChange($event)" />
+      <input type="date" [ngModel]="filters.date" (ngModelChange)="onDateChange($event)" />
     </label>
 
     <label class="filter-field">
       <span>Filter by Data Type</span>
-      <select [value]="filters.dataType" (change)="onDataTypeChange($event)">
-        <option *ngFor="let option of dataTypeOptions" [value]="option.value">
+      <select [ngModel]="filters.dataType" (ngModelChange)="onDataTypeChange($event)">
+        <option *ngFor="let option of dataTypeOptions; trackBy: trackByOptionValue" [ngValue]="option.value">
           {{ option.label }}
         </option>
       </select>

@@ -25,7 +25,6 @@ export interface PremiumMembership {
   isPremium: boolean;
   premiumPlan: PremiumPlan | null;
   premiumSince: string | null;
-  paymentLast4?: string | null;
 }
 
 export interface UserSession extends UserProfile, PremiumMembership {}

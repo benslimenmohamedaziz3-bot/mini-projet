@@ -40,8 +40,7 @@ export class PremiumService {
       role,
       isPremium,
       premiumPlan,
-      premiumSince,
-      paymentLast4: null
+      premiumSince
     };
   }
 

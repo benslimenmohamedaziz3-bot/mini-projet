@@ -2,8 +2,14 @@ import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable, catchError, forkJoin, map, of, shareReplay, tap, throwError } from 'rxjs';
 import { environment } from '../../../environments/environment';
-import { NewsCategory } from '../models/category.model';
-import { NewsDataType, NewsFilters } from '../models/filter.model';
+import { CATEGORY_OPTIONS, CategoryOption, NewsCategory } from '../models/category.model';
+import {
+  COUNTRY_OPTIONS,
+  DATA_TYPE_OPTIONS,
+  NewsDataType,
+  NewsFilters,
+  SelectOption
+} from '../models/filter.model';
 import {
   NewsApiArticle,
   NewsApiResponse,
@@ -29,6 +35,21 @@ export class NewsService {
   private readonly defaultCategoryDisplayCount = 5;
   private readonly preferredCategoryDisplayCount = 10;
   private readonly focusedCategoryDisplayCount = 12;
+  private readonly categoryLabelMap = new Map(
+    CATEGORY_OPTIONS.map((option) => [option.value, option.label] as const)
+  );
+  private readonly countryLabelMap = new Map(
+    COUNTRY_OPTIONS.map((option) => [option.value, option.label] as const)
+  );
+  private readonly countryValueMap = new Map(
+    COUNTRY_OPTIONS.flatMap((option) => [
+      [this.normalizeOptionText(option.value), option.value] as const,
+      [this.normalizeOptionText(option.label), option.value] as const
+    ])
+  );
+  private readonly dataTypeLabelMap = new Map(
+    DATA_TYPE_OPTIONS.map((option) => [option.value, option.label] as const)
+  );
 
   private readonly categories: RealCategory[] = [
     'technology',
@@ -71,6 +92,17 @@ export class NewsService {
     return this.getAllNews().pipe(
       map((store) => this.buildHomeFeedFromStore(store, filters, preferredCategories))
     );
+  }
+
+  getAvailableFilterOptions(
+    filters: NewsFilters
+  ): Observable<{
+    categoryOptions: CategoryOption[];
+    countryOptions: SelectOption[];
+    sourceOptions: SelectOption[];
+    dataTypeOptions: SelectOption[];
+  }> {
+    return this.getAllNews().pipe(map((store) => this.buildAvailableFilterOptions(store, filters)));
   }
 
   getArticleById(articleId: string, category?: RealCategory): Observable<NewsArticle | null> {
@@ -137,15 +169,7 @@ export class NewsService {
       map((response) =>
         (response.results ?? []).map((item, index) => this.mapArticle(item, index))
       ),
-      map((articles) =>
-        articles.map((article) => ({
-          ...article,
-          category,
-          matchedCategories: Array.from(
-            new Set<RealCategory>([...(article.matchedCategories ?? [article.category]), category])
-          )
-        }))
-      ),
+      map((articles) => articles.map((article) => ({ ...article, category }))),
       map((articles) => articles.filter((article) => !!article.title)),
       map((articles) => this.sortByNewest(this.dedupeArticles(articles)))
     );
@@ -226,10 +250,49 @@ export class NewsService {
     };
   }
 
+  private buildAvailableFilterOptions(
+    store: NewsStore,
+    filters: NewsFilters
+  ): {
+    categoryOptions: CategoryOption[];
+    countryOptions: SelectOption[];
+    sourceOptions: SelectOption[];
+    dataTypeOptions: SelectOption[];
+  } {
+    const allArticles = Object.values(store).flat();
+    const scopedArticles = this.getScopedArticles(store, filters.category);
+    const categoryArticles = this.applyFilters(allArticles, { ...filters, category: 'all' });
+    const countryArticles = this.applyFilters(scopedArticles, { ...filters, country: '' });
+    const sourceArticles = this.applyFilters(scopedArticles, { ...filters, source: '' });
+    const dataTypeArticles = this.applyFilters(scopedArticles, { ...filters, dataType: '' });
+
+    return {
+      categoryOptions: this.ensureSelectedCategoryOption(
+        this.buildCategoryOptions(categoryArticles),
+        filters.category
+      ),
+      countryOptions: this.ensureSelectedSelectOption(
+        this.buildCountryOptions(countryArticles),
+        filters.country,
+        this.getCountryLabel(this.getCountryValue(filters.country))
+      ),
+      sourceOptions: this.ensureSelectedSelectOption(
+        this.buildSourceOptions(sourceArticles),
+        filters.source,
+        filters.source
+      ),
+      dataTypeOptions: this.ensureSelectedSelectOption(
+        this.buildDataTypeOptions(dataTypeArticles),
+        filters.dataType,
+        filters.dataType ? this.getDataTypeLabel(filters.dataType) : ''
+      )
+    };
+  }
+
   private applyFilters(articles: NewsArticle[], filters: NewsFilters): NewsArticle[] {
     return this.sortByNewest(
       articles.filter((article) => {
-        if (filters.country && !article.countries?.includes(filters.country.toLowerCase())) {
+        if (filters.country && !this.matchesCountry(article, filters.country)) {
           return false;
         }
 
@@ -248,6 +311,128 @@ export class NewsService {
         return true;
       })
     );
+  }
+
+  private getScopedArticles(store: NewsStore, category: NewsCategory): NewsArticle[] {
+    if (category === 'all') {
+      return Object.values(store).flat();
+    }
+
+    return store[category] ?? [];
+  }
+
+  private buildCategoryOptions(articles: NewsArticle[]): CategoryOption[] {
+    const categoryValues = Array.from(
+      new Set(articles.map((article) => article.category))
+    ).sort((left, right) => this.getCategoryLabel(left).localeCompare(this.getCategoryLabel(right)));
+
+    return [
+      { label: 'All', value: 'all' },
+      ...categoryValues.map((category) => ({
+        label: this.getCategoryLabel(category),
+        value: category
+      }))
+    ];
+  }
+
+  private ensureSelectedCategoryOption(
+    options: CategoryOption[],
+    selectedCategory: NewsCategory
+  ): CategoryOption[] {
+    if (selectedCategory === 'all' || options.some((option) => option.value === selectedCategory)) {
+      return options;
+    }
+
+    return [
+      options[0],
+      {
+        label: this.getCategoryLabel(selectedCategory),
+        value: selectedCategory
+      },
+      ...options.slice(1)
+    ];
+  }
+
+  private buildCountryOptions(articles: NewsArticle[]): SelectOption[] {
+    const countryValues = Array.from(
+      new Set(
+        articles
+          .flatMap((article) => article.countries ?? [])
+          .map((country) => this.getCountryValue(country))
+          .filter(Boolean)
+      )
+    ).sort((left, right) => this.getCountryLabel(left).localeCompare(this.getCountryLabel(right)));
+
+    return [
+      { label: 'All Countries', value: '' },
+      ...countryValues.map((country) => ({
+        label: this.getCountryLabel(country),
+        value: country
+      }))
+    ];
+  }
+
+  private ensureSelectedSelectOption(
+    options: SelectOption[],
+    selectedValue: string,
+    selectedLabel: string
+  ): SelectOption[] {
+    if (!selectedValue || options.some((option) => option.value === selectedValue)) {
+      return options;
+    }
+
+    return [
+      options[0],
+      {
+        label: selectedLabel || selectedValue,
+        value: selectedValue
+      },
+      ...options.slice(1)
+    ];
+  }
+
+  private matchesCountry(article: NewsArticle, countryFilter: string): boolean {
+    const normalizedFilter = this.getCountryValue(countryFilter);
+
+    return (article.countries ?? []).some(
+      (country) => this.getCountryValue(country) === normalizedFilter
+    );
+  }
+
+  private buildSourceOptions(articles: NewsArticle[]): SelectOption[] {
+    const sourceMap = new Map<string, string>();
+
+    for (const article of articles) {
+      const domain = this.normalizeDomain(article.sourceDomain || article.url || article.sourceName);
+      if (!domain) {
+        continue;
+      }
+
+      sourceMap.set(domain, sourceMap.get(domain) ?? article.sourceName?.trim() ?? domain);
+    }
+
+    const sourceOptions = Array.from(sourceMap.entries()).sort((left, right) =>
+      left[1].localeCompare(right[1])
+    );
+
+    return [
+      { label: 'All Sources', value: '' },
+      ...sourceOptions.map(([value, label]) => ({ label, value }))
+    ];
+  }
+
+  private buildDataTypeOptions(articles: NewsArticle[]): SelectOption[] {
+    const dataTypeValues = Array.from(
+      new Set(articles.map((article) => article.dataType ?? 'news'))
+    ).sort((left, right) => this.getDataTypeLabel(left).localeCompare(this.getDataTypeLabel(right)));
+
+    return [
+      { label: 'All Data Types', value: '' },
+      ...dataTypeValues.map((dataType) => ({
+        label: this.getDataTypeLabel(dataType),
+        value: dataType
+      }))
+    ];
   }
 
   private matchesSource(article: NewsArticle, sourceFilter: string): boolean {
@@ -303,10 +488,8 @@ export class NewsService {
       url: item.link || '#',
       category: primaryCategory,
       sourceDomain,
-      sourceId: item.source_id || '',
       countries: (item.country ?? []).map((country) => country.toLowerCase()),
-      dataType: inferredDataType,
-      matchedCategories: resolvedCategories
+      dataType: inferredDataType
     };
   }
 
@@ -509,6 +692,38 @@ export class NewsService {
     } catch {
       return safeValue.replace(/^www\./, '').replace(/^https?:\/\//, '').split('/')[0];
     }
+  }
+
+  private getCategoryLabel(category: NewsCategory): string {
+    return this.categoryLabelMap.get(category) ?? this.toCategoryLabel(category as RealCategory);
+  }
+
+  private getCountryLabel(countryCode: string): string {
+    return this.countryLabelMap.get(countryCode) ?? countryCode.toUpperCase();
+  }
+
+  private getCountryValue(country: string): string {
+    const normalizedCountry = this.normalizeOptionText(country);
+    const aliases: Record<string, string> = {
+      usa: 'us',
+      'u s': 'us',
+      'u s a': 'us',
+      america: 'us',
+      'united states of america': 'us',
+      uk: 'gb',
+      britain: 'gb',
+      'great britain': 'gb'
+    };
+
+    return this.countryValueMap.get(normalizedCountry) ?? aliases[normalizedCountry] ?? normalizedCountry;
+  }
+
+  private getDataTypeLabel(dataType: NewsDataType): string {
+    return this.dataTypeLabelMap.get(dataType) ?? dataType;
+  }
+
+  private normalizeOptionText(value: string): string {
+    return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   }
 
   private toDateKey(value: string): string {

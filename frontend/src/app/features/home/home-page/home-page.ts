@@ -1,17 +1,18 @@
 import { CommonModule } from '@angular/common';
 import { HttpErrorResponse } from '@angular/common/http';
 import { Component, OnDestroy, OnInit, inject } from '@angular/core';
-import { Subscription } from 'rxjs';
-import { CATEGORY_OPTIONS } from '../../../core/models/category.model';
+import { Subscription, forkJoin } from 'rxjs';
+import { CATEGORY_OPTIONS, CategoryOption } from '../../../core/models/category.model';
 import {
   COUNTRY_OPTIONS,
   DATA_TYPE_OPTIONS,
   DEFAULT_NEWS_FILTERS,
   NewsFilters,
+  SelectOption,
   SOURCE_OPTIONS
 } from '../../../core/models/filter.model';
 import { NewsArticle, NewsSection } from '../../../core/models/news.model';
-import { PreferredNewsCategory, UserSession } from '../../../core/models/user.model';
+import { PreferredNewsCategory } from '../../../core/models/user.model';
 import { AuthService } from '../../../core/services/auth/auth';
 import { NewsService } from '../../../core/services/news';
 import { CategoryFilterComponent } from '../../../shared/components/category-filter/category-filter';
@@ -40,14 +41,14 @@ export class HomePageComponent implements OnInit, OnDestroy {
   private readonly rateLimitWindowMs = 15 * 60 * 1000;
   private readonly subscription = new Subscription();
   private rateLimitedUntil = 0;
+  private loadRequestId = 0;
   private pendingLoadId: ReturnType<typeof setTimeout> | null = null;
 
-  readonly categories = CATEGORY_OPTIONS;
-  readonly countryOptions = COUNTRY_OPTIONS;
-  readonly sourceOptions = SOURCE_OPTIONS;
-  readonly dataTypeOptions = DATA_TYPE_OPTIONS;
+  categories: CategoryOption[] = CATEGORY_OPTIONS;
+  countryOptions: SelectOption[] = COUNTRY_OPTIONS;
+  sourceOptions: SelectOption[] = SOURCE_OPTIONS;
+  dataTypeOptions: SelectOption[] = DATA_TYPE_OPTIONS;
 
-  currentUser: UserSession | null = null;
   preferredCategories: PreferredNewsCategory[] = [];
   filters: NewsFilters = { ...DEFAULT_NEWS_FILTERS };
   visibleArticles: NewsArticle[] = [];
@@ -58,7 +59,6 @@ export class HomePageComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.subscription.add(
       this.authService.currentUser$.subscribe((user) => {
-        this.currentUser = user;
         this.preferredCategories = (user?.interests ?? []).slice(0, 3);
         this.loadNews();
       })
@@ -109,14 +109,31 @@ export class HomePageComponent implements OnInit, OnDestroy {
 
     this.loading = true;
     this.error = '';
+    const requestId = ++this.loadRequestId;
+    const currentFilters = { ...this.filters };
 
-    this.newsService.getHomeFeed(this.filters, this.preferredCategories).subscribe({
-      next: (feed) => {
+    forkJoin({
+      feed: this.newsService.getHomeFeed(currentFilters, this.preferredCategories),
+      availableOptions: this.newsService.getAvailableFilterOptions(currentFilters)
+    }).subscribe({
+      next: ({ feed, availableOptions }) => {
+        if (requestId !== this.loadRequestId) {
+          return;
+        }
+
+        this.categories = availableOptions.categoryOptions;
+        this.countryOptions = availableOptions.countryOptions;
+        this.sourceOptions = availableOptions.sourceOptions;
+        this.dataTypeOptions = availableOptions.dataTypeOptions;
         this.visibleSections = feed.sections;
         this.visibleArticles = feed.articles;
         this.loading = false;
       },
       error: (error: HttpErrorResponse) => {
+        if (requestId !== this.loadRequestId) {
+          return;
+        }
+
         if (error.status === 429) {
           this.rateLimitedUntil = Date.now() + this.rateLimitWindowMs;
           this.error = 'Rate limit reached. Please wait a few minutes and try again.';
